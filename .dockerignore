@@ -3,3 +3,10 @@ dist
 logs
 .git
 .env
+.env.*
+!.env.example
+.husky
+.vercel
+Dockerfile
+docker-compose.yml
+docker
