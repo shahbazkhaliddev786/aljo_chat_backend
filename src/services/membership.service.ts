@@ -1,6 +1,7 @@
 import { and, eq } from 'drizzle-orm'
 import { db } from '../db/index.js'
 import { conversations, conversationMembers } from '../db/schema/conversations.js'
+import { badRequest, forbidden } from '../utils/app-error.js'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -37,8 +38,8 @@ export const assertMembership = async (
   type?: 'direct' | 'group'
 ): Promise<Membership> => {
   const membership = await getMembership(conversationId, userId)
-  if (!membership) throw new Error('Access denied: Not a member of this conversation')
-  if (type && membership.conversationType !== type) throw new Error(`This action requires a ${type} conversation`)
+  if (!membership) throw forbidden('Access denied: Not a member of this conversation')
+  if (type && membership.conversationType !== type) throw badRequest(`This action requires a ${type} conversation`)
   return membership
 }
 

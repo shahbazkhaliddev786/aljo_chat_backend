@@ -5,6 +5,7 @@ import { createMessage, markMessageAsRead } from '../services/message.service.js
 import { getMembership, isUuid } from '../services/membership.service.js'
 import { conversationRoom, userRooms } from './rooms.js'
 import logger from '../utils/logger.js'
+import { publicErrorMessage } from '../utils/app-error.js'
 
 type Ack = (response: Record<string, unknown>) => void
 const safeAck = (callback: unknown): Ack => (typeof callback === 'function' ? (callback as Ack) : () => {})
@@ -40,34 +41,37 @@ export const registerChatHandlers = (io: Server, socket: AuthenticatedSocket) =>
   socket.on(ESocketEvents.LEAVE_CONVERSATION, () => {})
 
   // Send real-time chat message. Ack: { message } or { error }.
-  socket.on(ESocketEvents.SEND_MESSAGE, async (payload: ISendMessagePayload & Record<string, any>, callback: unknown) => {
-    const ack = safeAck(callback)
-    if (!socket.user || !isUuid(payload?.conversationId)) return ack({ error: 'Valid conversationId is required' })
+  socket.on(
+    ESocketEvents.SEND_MESSAGE,
+    async (payload: ISendMessagePayload & Record<string, any>, callback: unknown) => {
+      const ack = safeAck(callback)
+      if (!socket.user || !isUuid(payload?.conversationId)) return ack({ error: 'Valid conversationId is required' })
 
-    try {
-      const message = await createMessage({
-        conversationId: payload.conversationId,
-        senderId: socket.user.id,
-        content: payload.content,
-        type: payload.type,
-        mediaUrl: payload.mediaUrl,
-        replyToId: payload.replyToId,
-        isEncrypted: payload.isEncrypted === true,
-        ciphertext: payload.ciphertext,
-        iv: payload.iv,
-        senderPublicKey: payload.senderPublicKey,
-        recipientPublicKey: payload.recipientPublicKey,
-        clientMessageId: payload.clientMessageId
-      })
+      try {
+        const message = await createMessage({
+          conversationId: payload.conversationId,
+          senderId: socket.user.id,
+          content: payload.content,
+          type: payload.type,
+          mediaUrl: payload.mediaUrl,
+          replyToId: payload.replyToId,
+          isEncrypted: payload.isEncrypted === true,
+          ciphertext: payload.ciphertext,
+          iv: payload.iv,
+          senderPublicKey: payload.senderPublicKey,
+          recipientPublicKey: payload.recipientPublicKey,
+          clientMessageId: payload.clientMessageId
+        })
 
-      // One emit to every member's personal room: each socket receives it exactly once.
-      io.to(userRooms(message.memberUserIds)).emit(ESocketEvents.RECEIVE_MESSAGE, message)
-      ack({ message })
-    } catch (error: any) {
-      logger.error('SOCKET_SEND_MESSAGE_ERROR', { error: error.message })
-      ack({ error: error.message })
+        // One emit to every member's personal room: each socket receives it exactly once.
+        io.to(userRooms(message.memberUserIds)).emit(ESocketEvents.RECEIVE_MESSAGE, message)
+        ack({ message })
+      } catch (error: any) {
+        logger.error('SOCKET_SEND_MESSAGE_ERROR', { error: error.message })
+        ack({ error: publicErrorMessage(error) })
+      }
     }
-  })
+  )
 
   // Read receipt event (only for conversations this socket is a member of)
   socket.on(ESocketEvents.MESSAGE_READ, async ({ conversationId, messageId }: IReadReceiptPayload) => {
@@ -75,13 +79,9 @@ export const registerChatHandlers = (io: Server, socket: AuthenticatedSocket) =>
     if (!socket.rooms.has(conversationRoom(conversationId))) return
 
     try {
-      await markMessageAsRead(conversationId, socket.user.id, messageId)
-
-      socket.to(conversationRoom(conversationId)).emit(ESocketEvents.MESSAGE_READ, {
-        conversationId,
-        userId: socket.user.id,
-        messageId
-      })
+      const receipt = await markMessageAsRead(conversationId, socket.user.id, messageId)
+      // Everyone in the conversation (including the reader's other tabs) updates their view.
+      if (receipt) io.to(conversationRoom(conversationId)).emit(ESocketEvents.MESSAGE_READ, receipt)
     } catch (error: any) {
       logger.error('SOCKET_READ_RECEIPT_ERROR', { error: error.message })
     }

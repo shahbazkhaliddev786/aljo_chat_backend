@@ -138,10 +138,6 @@ export const addMembers = asyncHandler(async (req: Request, res: Response) => {
   const conversationId = req.params.id as string
   const { memberIds } = req.body
 
-  if (!Array.isArray(memberIds) || memberIds.length === 0) {
-    return apiResponse(res, 400, 'error', 'memberIds array is required')
-  }
-
   const result = await addGroupMembers(conversationId, adminUserId, memberIds)
 
   withSocket('members-added', (io) => {

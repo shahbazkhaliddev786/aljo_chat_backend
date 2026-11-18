@@ -1,10 +1,14 @@
 import type { Request, Response } from 'express'
 import { asyncHandler } from '../utils/async.handler.js'
 import { apiResponse } from '../utils/api.response.js'
-import { registerUser, loginUser, refreshAccessToken, logoutUser } from '../services/auth.service.js'
+import { registerUser, loginUser, refreshAccessToken, logoutUser, isEmailTaken } from '../services/auth.service.js'
+import { conflict } from '../utils/app-error.js'
 import { uploadToCloudinary } from '../utils/cloudinary.js'
 
 export const register = asyncHandler(async (req: Request, res: Response) => {
+  // Check before uploading so a failed registration does not leave an orphaned avatar.
+  if (await isEmailTaken(req.body.email)) throw conflict('User with this email already exists')
+
   let avatarUrl: string | undefined
   if (req.file) {
     avatarUrl = await uploadToCloudinary(req.file, 'aljo-chat/avatars')

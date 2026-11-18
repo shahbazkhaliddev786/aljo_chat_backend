@@ -14,7 +14,7 @@ export const socketAuthMiddleware = async (socket: AuthenticatedSocket, next: (e
       return next(new Error('Authentication failed: No token provided'))
     }
 
-    const payload = jwt.verify(token, config.JWT_SECRET) as { userId: string }
+    const payload = jwt.verify(token, config.JWT_SECRET) as { userId: string; exp?: number }
 
     const [user] = await db
       .select({
@@ -32,6 +32,8 @@ export const socketAuthMiddleware = async (socket: AuthenticatedSocket, next: (e
     }
 
     socket.user = user
+    // Used by the session handler to ask the client to renew before the token expires.
+    socket.data.tokenExp = payload.exp
     next()
   } catch (error: any) {
     logger.warn('Socket Authentication Error', { error: error.message })

@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, boolean, timestamp, pgEnum, varchar, uniqueIndex } from 'drizzle-orm/pg-core'
+import { pgTable, uuid, text, boolean, timestamp, pgEnum, varchar, uniqueIndex, index } from 'drizzle-orm/pg-core'
 import { relations } from 'drizzle-orm'
 import { users } from './users.js'
 import { conversations } from './conversations.js'
@@ -33,7 +33,11 @@ export const messages = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull()
   },
-  (table) => [uniqueIndex('messages_sender_client_message_idx').on(table.senderId, table.clientMessageId)]
+  (table) => [
+    uniqueIndex('messages_sender_client_message_idx').on(table.senderId, table.clientMessageId),
+    // Message pages and "latest message per conversation" queries.
+    index('messages_conversation_created_idx').on(table.conversationId, table.createdAt)
+  ]
 )
 
 export const messageReactions = pgTable('message_reactions', {

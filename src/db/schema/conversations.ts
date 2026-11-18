@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, text, timestamp, pgEnum, uniqueIndex } from 'drizzle-orm/pg-core'
+import { pgTable, uuid, varchar, text, timestamp, pgEnum, uniqueIndex, index } from 'drizzle-orm/pg-core'
 import { relations } from 'drizzle-orm'
 import { users } from './users.js'
 import { messages } from './messages.js'
@@ -31,7 +31,11 @@ export const conversationMembers = pgTable(
     joinedAt: timestamp('joined_at', { withTimezone: true }).defaultNow().notNull(),
     lastReadMessageId: uuid('last_read_message_id')
   },
-  (table) => [uniqueIndex('conversation_user_idx').on(table.conversationId, table.userId)]
+  (table) => [
+    uniqueIndex('conversation_user_idx').on(table.conversationId, table.userId),
+    // "Conversations of user X" lookups (socket room joins, conversation list).
+    index('conversation_members_user_idx').on(table.userId)
+  ]
 )
 
 export const conversationsRelations = relations(conversations, ({ one, many }) => ({

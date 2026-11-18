@@ -5,9 +5,15 @@ import { registerTypingHandlers } from './typing.handler.js'
 import { registerChatHandlers } from './chat.handler.js'
 import { registerCallHandlers } from './call.handler.js'
 import { registerMediasoupHandlers } from './mediasoup.handler.js'
+import { registerSessionHandlers } from './session.handler.js'
+import { applySocketRateLimit } from './rate-limit.js'
 
 export const initializeSocketHandlers = (io: Server) => {
   io.on('connection', (socket: AuthenticatedSocket) => {
+    // 0. Abuse protection and token-expiry handling
+    applySocketRateLimit(socket)
+    registerSessionHandlers(io, socket)
+
     // 1. Presence setup on connect
     handlePresenceOnConnect(io, socket)
 
@@ -23,10 +29,13 @@ export const initializeSocketHandlers = (io: Server) => {
     // 5. Group Mediasoup SFU handlers
     registerMediasoupHandlers(io, socket)
 
-    // 6. Disconnect listener
+    // 6. Disconnect listeners. Rooms are captured while still joined, because
+    //    they are already left by the time 'disconnect' fires.
+    socket.on('disconnecting', () => {
+      socket.data.roomsAtDisconnect = Array.from(socket.rooms)
+    })
     socket.on('disconnect', () => {
       handlePresenceOnDisconnect(io, socket)
     })
   })
 }
-

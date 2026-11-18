@@ -4,6 +4,7 @@ import { AuthenticatedSocket } from '../types/socket.types.js'
 import { assertMembership, getMemberUserIds } from '../services/membership.service.js'
 import { userRoom } from './rooms.js'
 import logger from '../utils/logger.js'
+import { badRequest, conflict, notFound, publicErrorMessage, unauthorized } from '../utils/app-error.js'
 
 /**
  * 1-on-1 call signaling.
@@ -98,11 +99,11 @@ export const registerCallHandlers = (io: Server, socket: AuthenticatedSocket) =>
     socket.on(event, async (payload: any, callback: unknown) => {
       const ack = safeAck(callback)
       try {
-        if (!currentUserId) throw new Error('Unauthorized')
+        if (!currentUserId) throw unauthorized()
         await handler(payload || {}, ack, currentUserId)
       } catch (err: any) {
         logger.warn('CALL_EVENT_FAILED', { meta: { event, userId: currentUserId, error: err.message } })
-        ack({ error: err.message })
+        ack({ error: publicErrorMessage(err) })
       }
     })
   }
@@ -111,7 +112,7 @@ export const registerCallHandlers = (io: Server, socket: AuthenticatedSocket) =>
   const getOwnCall = (callId: unknown): DirectCall => {
     const call = typeof callId === 'string' ? calls.get(callId) : undefined
     if (!call || (call.callerSocketId !== socket.id && call.calleeSocketId !== socket.id)) {
-      throw new Error('Call not found')
+      throw notFound('Call not found')
     }
     return call
   }
@@ -121,7 +122,7 @@ export const registerCallHandlers = (io: Server, socket: AuthenticatedSocket) =>
     await assertMembership(conversationId, userId, 'direct')
 
     const calleeUserId = (await getMemberUserIds(conversationId)).find((id) => id !== userId)
-    if (!calleeUserId) throw new Error('No one to call in this conversation')
+    if (!calleeUserId) throw badRequest('No one to call in this conversation')
 
     if (findCallBySocket(socket.id) || isUserInCall(userId)) {
       return ack({ error: 'You are already in a call', code: 'self-busy' })
@@ -164,8 +165,8 @@ export const registerCallHandlers = (io: Server, socket: AuthenticatedSocket) =>
   // Callee accepts on this socket; other tabs of the callee stop ringing.
   on('call:accept', ({ callId }, ack, userId) => {
     const call = typeof callId === 'string' ? calls.get(callId) : undefined
-    if (!call || call.calleeUserId !== userId) throw new Error('Call not found')
-    if (call.calleeSocketId) throw new Error('Call already answered')
+    if (!call || call.calleeUserId !== userId) throw notFound('Call not found')
+    if (call.calleeSocketId) throw conflict('Call already answered')
 
     call.calleeSocketId = socket.id
     if (call.ringTimer) clearTimeout(call.ringTimer)
@@ -183,7 +184,7 @@ export const registerCallHandlers = (io: Server, socket: AuthenticatedSocket) =>
   // Callee declines (or is busy) before answering.
   on('call:reject', ({ callId, reason }, ack, userId) => {
     const call = typeof callId === 'string' ? calls.get(callId) : undefined
-    if (!call || call.calleeUserId !== userId || call.calleeSocketId) throw new Error('Call not found')
+    if (!call || call.calleeUserId !== userId || call.calleeSocketId) throw notFound('Call not found')
 
     removeCall(call)
     const safeReason = reason === 'busy' ? 'busy' : 'declined'
@@ -200,11 +201,19 @@ export const registerCallHandlers = (io: Server, socket: AuthenticatedSocket) =>
   const relay = (event: string, field: 'sdp' | 'candidate') =>
     on(event, (payload, ack) => {
       const call = getOwnCall(payload.callId)
-      if (!call.calleeSocketId) throw new Error('Call not answered yet')
+      if (!call.calleeSocketId) throw badRequest('Call not answered yet')
       const target = otherParty(call, socket.id)
       if (target) io.to(target).emit(event, { callId: call.callId, [field]: payload[field] })
       ack({ ok: true })
     })
+
+  // Mic / camera on-off indicator for the other side.
+  on('call:media-state', ({ callId, audio, video }, ack) => {
+    const call = getOwnCall(callId)
+    const target = otherParty(call, socket.id)
+    if (target) io.to(target).emit('call:media-state', { callId, audio: audio !== false, video: video !== false })
+    ack({ ok: true })
+  })
 
   relay('call:offer', 'sdp')
   relay('call:answer', 'sdp')

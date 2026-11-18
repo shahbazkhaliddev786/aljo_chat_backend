@@ -42,7 +42,8 @@ export const config = {
 
   // JWT
   JWT_SECRET: requireSecret('JWT_SECRET'),
-  JWT_EXPIRES_IN: process.env.JWT_EXPIRES_IN || '7d',
+  // Short-lived: the frontend renews it with the refresh token.
+  JWT_EXPIRES_IN: process.env.JWT_EXPIRES_IN || '15m',
   REFRESH_TOKEN_SECRET: requireSecret('REFRESH_TOKEN_SECRET'),
   REFRESH_TOKEN_EXPIRES_IN: process.env.REFRESH_TOKEN_EXPIRES_IN || '30d',
 

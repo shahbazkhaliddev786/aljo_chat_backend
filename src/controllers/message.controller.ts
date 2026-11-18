@@ -13,8 +13,8 @@ export const getMessages = asyncHandler(async (req: Request, res: Response) => {
   const limit = req.query.limit ? Number(req.query.limit) : 50
   const before = req.query.before as string | undefined
 
-  const messages = await getConversationMessages(conversationId, userId, limit, before)
-  return apiResponse(res, 200, 'success', 'Messages retrieved', { messages })
+  const { messages, hasMore } = await getConversationMessages(conversationId, userId, limit, before)
+  return apiResponse(res, 200, 'success', 'Messages retrieved', { messages, hasMore })
 })
 
 export const sendMessageHttp = asyncHandler(async (req: Request, res: Response) => {

@@ -1,6 +1,7 @@
 import * as mediasoup from 'mediasoup'
 import config from '../config/config.js'
 import logger from '../utils/logger.js'
+import { badRequest, forbidden, notFound } from '../utils/app-error.js'
 
 type Router = mediasoup.types.Router
 type WebRtcTransport = mediasoup.types.WebRtcTransport
@@ -20,6 +21,8 @@ interface Peer {
   transports: Map<string, WebRtcTransport>
   producers: Map<string, Producer>
   consumers: Map<string, Consumer>
+  /** What the participant is sending, for mute/camera-off indicators. */
+  mediaState: { audio: boolean; video: boolean }
 }
 
 interface Room {
@@ -59,6 +62,14 @@ class MediasoupService {
   private workerPromise: Promise<mediasoup.types.Worker> | null = null
   private rooms: Map<string, Room> = new Map()
   private pendingRooms: Map<string, Promise<Room>> = new Map()
+  private shuttingDown = false
+
+  /** Close the worker as part of a graceful shutdown. */
+  public close() {
+    this.shuttingDown = true
+    this.worker?.close()
+    this.rooms.clear()
+  }
 
   public async init(): Promise<mediasoup.types.Worker> {
     if (this.worker) return this.worker
@@ -69,6 +80,7 @@ class MediasoupService {
         // Without a worker no group call can work, so exit and let the process
         // manager restart us instead of running on with a dead SFU.
         const onWorkerGone = (reason: string) => {
+          if (this.shuttingDown) return // expected during a graceful shutdown
           logger.error('MEDIASOUP_WORKER_DIED', { meta: { pid: worker.pid, reason } })
           setTimeout(() => process.exit(1), 2000)
         }
@@ -121,7 +133,7 @@ class MediasoupService {
   private getPeer(conversationId: string, socketId: string): { room: Room; peer: Peer } {
     const room = this.rooms.get(conversationId)
     const peer = room?.peers.get(socketId)
-    if (!room || !peer) throw new Error('You are not in this call')
+    if (!room || !peer) throw forbidden('You are not in this call')
     return { room, peer }
   }
 
@@ -137,7 +149,8 @@ class MediasoupService {
         userName,
         transports: new Map(),
         producers: new Map(),
-        consumers: new Map()
+        consumers: new Map(),
+        mediaState: { audio: true, video: true }
       })
     }
 
@@ -197,7 +210,7 @@ class MediasoupService {
   ) {
     const { peer } = this.getPeer(conversationId, socketId)
     const transport = peer.transports.get(transportId)
-    if (!transport) throw new Error('Transport not found')
+    if (!transport) throw notFound('Transport not found')
     await transport.connect({ dtlsParameters })
   }
 
@@ -208,11 +221,11 @@ class MediasoupService {
     kind: mediasoup.types.MediaKind,
     rtpParameters: mediasoup.types.RtpParameters
   ) {
-    if (kind !== 'audio' && kind !== 'video') throw new Error('Invalid media kind')
+    if (kind !== 'audio' && kind !== 'video') throw badRequest('Invalid media kind')
 
     const { peer } = this.getPeer(conversationId, socketId)
     const transport = peer.transports.get(transportId)
-    if (!transport) throw new Error('Transport not found')
+    if (!transport) throw notFound('Transport not found')
 
     const producer = await transport.produce({ kind, rtpParameters })
     peer.producers.set(producer.id, producer)
@@ -238,16 +251,18 @@ class MediasoupService {
         break
       }
     }
-    if (!producerOwner) throw new Error('Producer not found')
+    if (!producerOwner) throw notFound('Producer not found')
 
     if (!room.router.canConsume({ producerId, rtpCapabilities })) {
-      throw new Error('Cannot consume producer with provided capabilities')
+      throw badRequest('Cannot consume producer with provided capabilities')
     }
 
     const transport = peer.transports.get(transportId)
-    if (!transport) throw new Error('Transport not found')
+    if (!transport) throw notFound('Transport not found')
 
-    const consumer = await transport.consume({ producerId, rtpCapabilities, paused: false })
+    // Start paused: the client resumes once its consumer is ready, which makes
+    // mediasoup request a fresh keyframe so video does not start black.
+    const consumer = await transport.consume({ producerId, rtpCapabilities, paused: true })
     peer.consumers.set(consumer.id, consumer)
     consumer.on('transportclose', () => peer.consumers.delete(consumer.id))
     consumer.on('producerclose', () => {
@@ -264,6 +279,27 @@ class MediasoupService {
       producerUserName: producerOwner.userName,
       producerSocketId: producerOwner.socketId
     }
+  }
+
+  public async resumeConsumer(conversationId: string, socketId: string, consumerId: string) {
+    const { peer } = this.getPeer(conversationId, socketId)
+    const consumer = peer.consumers.get(consumerId)
+    if (!consumer) throw notFound('Consumer not found')
+    await consumer.resume()
+  }
+
+  public setMediaState(conversationId: string, socketId: string, state: { audio: boolean; video: boolean }) {
+    const { peer } = this.getPeer(conversationId, socketId)
+    peer.mediaState = state
+  }
+
+  /** Mute/camera state of every *other* participant (for late joiners). */
+  public getOtherPeerStates(conversationId: string, socketId: string) {
+    const room = this.rooms.get(conversationId)
+    if (!room) return []
+    return Array.from(room.peers.values())
+      .filter((p) => p.socketId !== socketId)
+      .map((p) => ({ socketId: p.socketId, userId: p.userId, userName: p.userName, ...p.mediaState }))
   }
 
   /** Producers of every *other* participant in the call. */

@@ -5,6 +5,7 @@ import { ESocketEvents } from '../constants/socket-events.js'
 import { assertMembership, getMemberUserIds } from '../services/membership.service.js'
 import { conversationRoom, userRooms } from './rooms.js'
 import logger from '../utils/logger.js'
+import { forbidden, publicErrorMessage, unauthorized } from '../utils/app-error.js'
 
 type Ack = (response: Record<string, unknown>) => void
 
@@ -44,11 +45,11 @@ export const registerMediasoupHandlers = (io: Server, socket: AuthenticatedSocke
     socket.on(event, async (payload: any, callback: unknown) => {
       const ack = safeAck(callback)
       try {
-        if (!currentUserId) throw new Error('Unauthorized')
+        if (!currentUserId) throw unauthorized()
         await handler(payload || {}, ack, currentUserId)
       } catch (err: any) {
         logger.warn('SFU_EVENT_FAILED', { meta: { event, userId: currentUserId, error: err.message } })
-        ack({ error: err.message })
+        ack({ error: publicErrorMessage(err) })
       }
     })
   }
@@ -107,8 +108,27 @@ export const registerMediasoupHandlers = (io: Server, socket: AuthenticatedSocke
   })
 
   on('sfu:get-producers', async ({ conversationId }, ack) => {
-    if (!mediasoupService.isInRoom(conversationId, socket.id)) throw new Error('You are not in this call')
-    ack({ producers: mediasoupService.getOtherProducers(conversationId, socket.id) })
+    if (!mediasoupService.isInRoom(conversationId, socket.id)) throw forbidden('You are not in this call')
+    ack({
+      producers: mediasoupService.getOtherProducers(conversationId, socket.id),
+      peers: mediasoupService.getOtherPeerStates(conversationId, socket.id)
+    })
+  })
+
+  on('sfu:resume-consumer', async ({ conversationId, consumerId }, ack) => {
+    await mediasoupService.resumeConsumer(conversationId, socket.id, String(consumerId))
+    ack({ ok: true })
+  })
+
+  // Mic / camera on-off, shown as indicators on the other participants' screens.
+  on('sfu:media-state', async ({ conversationId, audio, video }, ack, userId) => {
+    const state = { audio: audio !== false, video: video !== false }
+    mediasoupService.setMediaState(conversationId, socket.id, state)
+    const others = mediasoupService.getPeerSocketIds(conversationId, socket.id)
+    if (others.length > 0) {
+      io.to(others).emit('sfu:media-state', { conversationId, socketId: socket.id, userId, ...state })
+    }
+    ack({ ok: true })
   })
 
   // Ring the other members of the group.
