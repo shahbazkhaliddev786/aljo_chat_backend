@@ -13,7 +13,7 @@
     "declaration": true,
     "declarationMap": true,
     "incremental": true,
-    "tsBuildInfoFile": "./tsconfig.tsbuildinfo"
+    "tsBuildInfoFile": "./dist/.tsbuildinfo"
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]

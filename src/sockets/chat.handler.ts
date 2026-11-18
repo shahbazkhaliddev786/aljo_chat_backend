@@ -56,7 +56,8 @@ export const registerChatHandlers = (io: Server, socket: AuthenticatedSocket) =>
         ciphertext: payload.ciphertext,
         iv: payload.iv,
         senderPublicKey: payload.senderPublicKey,
-        recipientPublicKey: payload.recipientPublicKey
+        recipientPublicKey: payload.recipientPublicKey,
+        clientMessageId: payload.clientMessageId
       })
 
       // One emit to every member's personal room: each socket receives it exactly once.

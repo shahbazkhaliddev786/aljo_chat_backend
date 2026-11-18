@@ -3,6 +3,7 @@ import { messages, messageReactions } from '../db/schema/messages.js'
 import { conversations, conversationMembers } from '../db/schema/conversations.js'
 import { users } from '../db/schema/users.js'
 import { eq, and, desc } from 'drizzle-orm'
+import { isUuid } from './membership.service.js'
 
 export interface ISendMessageParams {
   conversationId: string
@@ -16,6 +17,7 @@ export interface ISendMessageParams {
   iv?: string
   senderPublicKey?: string
   recipientPublicKey?: string
+  clientMessageId?: string
 }
 
 export const createMessage = async (params: ISendMessageParams) => {
@@ -36,7 +38,9 @@ export const createMessage = async (params: ISendMessageParams) => {
     throw new Error('Encrypted messages require ciphertext and iv')
   }
 
-  const [newMessage] = await db
+  const clientMessageId = isUuid(params.clientMessageId) ? params.clientMessageId : null
+
+  const [inserted] = await db
     .insert(messages)
     .values({
       conversationId: params.conversationId,
@@ -49,18 +53,34 @@ export const createMessage = async (params: ISendMessageParams) => {
       ciphertext: isEncrypted ? params.ciphertext : null,
       iv: isEncrypted ? params.iv : null,
       senderPublicKey: isEncrypted ? params.senderPublicKey : null,
-      recipientPublicKey: isEncrypted ? params.recipientPublicKey : null
+      recipientPublicKey: isEncrypted ? params.recipientPublicKey : null,
+      clientMessageId
     })
+    .onConflictDoNothing({ target: [messages.senderId, messages.clientMessageId] })
     .returning()
 
-  // Update conversation lastMessageAt
-  await db
-    .update(conversations)
-    .set({
-      lastMessageAt: newMessage.createdAt,
-      updatedAt: new Date()
-    })
-    .where(eq(conversations.id, params.conversationId))
+  let newMessage = inserted
+  if (!newMessage) {
+    // Retry of a message that was already stored: return the original.
+    const [existing] = await db
+      .select()
+      .from(messages)
+      .where(and(eq(messages.senderId, params.senderId), eq(messages.clientMessageId, clientMessageId!)))
+      .limit(1)
+    if (!existing || existing.conversationId !== params.conversationId) {
+      throw new Error('Duplicate message id')
+    }
+    newMessage = existing
+  } else {
+    // Update conversation lastMessageAt
+    await db
+      .update(conversations)
+      .set({
+        lastMessageAt: newMessage.createdAt,
+        updatedAt: new Date()
+      })
+      .where(eq(conversations.id, params.conversationId))
+  }
 
   // Populate sender info
   const [sender] = await db
@@ -108,6 +128,7 @@ export const getConversationMessages = async (conversationId: string, userId: st
       iv: messages.iv,
       senderPublicKey: messages.senderPublicKey,
       recipientPublicKey: messages.recipientPublicKey,
+      clientMessageId: messages.clientMessageId,
       isEdited: messages.isEdited,
       isDeleted: messages.isDeleted,
       createdAt: messages.createdAt,

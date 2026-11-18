@@ -41,7 +41,8 @@ export const sendMessageHttp = asyncHandler(async (req: Request, res: Response) 
     ciphertext: req.body.ciphertext,
     iv: req.body.iv,
     senderPublicKey: req.body.senderPublicKey,
-    recipientPublicKey: req.body.recipientPublicKey
+    recipientPublicKey: req.body.recipientPublicKey,
+    clientMessageId: req.body.clientMessageId
   })
 
   // Broadcast message over Socket.io
