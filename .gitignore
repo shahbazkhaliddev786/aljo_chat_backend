@@ -6,3 +6,4 @@ logs/*.log
 .env.development
 .env.production
 .env.local
+*.tsbuildinfo

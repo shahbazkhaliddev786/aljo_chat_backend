@@ -69,11 +69,12 @@ export const updateUserProfile = async (userId: string, data: { name?: string; b
   return updatedUser
 }
 
-export const updatePublicKey = async (userId: string, publicKey: string) => {
+export const updatePublicKey = async (userId: string, publicKey: string, keyBackup?: string) => {
   const [updatedUser] = await db
     .update(users)
     .set({
       publicKey,
+      ...(keyBackup !== undefined ? { keyBackup } : {}),
       updatedAt: new Date()
     })
     .where(eq(users.id, userId))
@@ -85,4 +86,14 @@ export const updatePublicKey = async (userId: string, publicKey: string) => {
     })
 
   return updatedUser
+}
+
+export const getKeyBackup = async (userId: string) => {
+  const [row] = await db
+    .select({ publicKey: users.publicKey, keyBackup: users.keyBackup })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1)
+
+  return { publicKey: row?.publicKey || null, keyBackup: row?.keyBackup || null }
 }

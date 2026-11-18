@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express'
 import { asyncHandler } from '../utils/async.handler.js'
 import { apiResponse } from '../utils/api.response.js'
-import { searchUsers, getUserById, updateUserProfile, updatePublicKey } from '../services/user.service.js'
+import { searchUsers, getUserById, updateUserProfile, updatePublicKey, getKeyBackup } from '../services/user.service.js'
 import { uploadToCloudinary } from '../utils/cloudinary.js'
 
 export const search = asyncHandler(async (req: Request, res: Response) => {
@@ -36,12 +36,21 @@ export const updateProfile = asyncHandler(async (req: Request, res: Response) =>
 
 export const setPublicKey = asyncHandler(async (req: Request, res: Response) => {
   const userId = req.user?.id as string
-  const { publicKey } = req.body
+  const { publicKey, keyBackup } = req.body
 
-  if (!publicKey || typeof publicKey !== 'string') {
+  if (!publicKey || typeof publicKey !== 'string' || publicKey.length > 2048) {
     return apiResponse(res, 400, 'error', 'Valid publicKey string is required')
   }
+  if (keyBackup !== undefined && (typeof keyBackup !== 'string' || keyBackup.length > 8192)) {
+    return apiResponse(res, 400, 'error', 'keyBackup must be a string')
+  }
 
-  const user = await updatePublicKey(userId, publicKey)
+  const user = await updatePublicKey(userId, publicKey, keyBackup)
   return apiResponse(res, 200, 'success', 'Public key published successfully', { user })
+})
+
+export const getMyKeyBackup = asyncHandler(async (req: Request, res: Response) => {
+  const userId = req.user?.id as string
+  const keys = await getKeyBackup(userId)
+  return apiResponse(res, 200, 'success', 'Key backup retrieved', keys)
 })

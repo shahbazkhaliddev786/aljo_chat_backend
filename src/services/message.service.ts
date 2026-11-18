@@ -14,6 +14,8 @@ export interface ISendMessageParams {
   isEncrypted?: boolean
   ciphertext?: string
   iv?: string
+  senderPublicKey?: string
+  recipientPublicKey?: string
 }
 
 export const createMessage = async (params: ISendMessageParams) => {
@@ -28,18 +30,26 @@ export const createMessage = async (params: ISendMessageParams) => {
     throw new Error('Access denied: Not a member of this conversation')
   }
 
+  // An encrypted message must carry its ciphertext and must never also carry plaintext.
+  const isEncrypted = params.isEncrypted === true
+  if (isEncrypted && (!params.ciphertext || !params.iv)) {
+    throw new Error('Encrypted messages require ciphertext and iv')
+  }
+
   const [newMessage] = await db
     .insert(messages)
     .values({
       conversationId: params.conversationId,
       senderId: params.senderId,
-      content: params.content,
+      content: isEncrypted ? null : params.content,
       type: params.type || 'text',
       mediaUrl: params.mediaUrl,
       replyToId: params.replyToId,
-      isEncrypted: params.isEncrypted || false,
-      ciphertext: params.ciphertext,
-      iv: params.iv
+      isEncrypted,
+      ciphertext: isEncrypted ? params.ciphertext : null,
+      iv: isEncrypted ? params.iv : null,
+      senderPublicKey: isEncrypted ? params.senderPublicKey : null,
+      recipientPublicKey: isEncrypted ? params.recipientPublicKey : null
     })
     .returning()
 
@@ -96,6 +106,8 @@ export const getConversationMessages = async (conversationId: string, userId: st
       isEncrypted: messages.isEncrypted,
       ciphertext: messages.ciphertext,
       iv: messages.iv,
+      senderPublicKey: messages.senderPublicKey,
+      recipientPublicKey: messages.recipientPublicKey,
       isEdited: messages.isEdited,
       isDeleted: messages.isDeleted,
       createdAt: messages.createdAt,

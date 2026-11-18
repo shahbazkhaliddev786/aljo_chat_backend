@@ -6,6 +6,9 @@ import { users } from '../db/schema/users.js'
 import { conversationMembers } from '../db/schema/conversations.js'
 import { eq } from 'drizzle-orm'
 import logger from '../utils/logger.js'
+import { mediasoupService } from '../services/mediasoup.service.js'
+import { notifyCallLeave } from './mediasoup.handler.js'
+import { handleDirectCallDisconnect } from './call.handler.js'
 
 export const handlePresenceOnConnect = async (io: Server, socket: AuthenticatedSocket) => {
   if (!socket.user) return
@@ -49,36 +52,14 @@ export const handlePresenceOnConnect = async (io: Server, socket: AuthenticatedS
   }
 }
 
-import { mediasoupService } from '../services/mediasoup.service.js'
-
 export const handlePresenceOnDisconnect = async (io: Server, socket: AuthenticatedSocket) => {
   if (!socket.user) return
 
   try {
-    // 1. Clean up SFU ghost streams using both socket.id and user.id
-    const affectedRooms = mediasoupService.removeSocketFromAllRooms(socket.id, socket.user.id)
-    for (const conversationId of affectedRooms) {
-      const leaveData = {
-        socketId: socket.id,
-        userId: socket.user.id,
-      }
-
-      socket.to(`conversation:${conversationId}`).emit('sfu:user-left', leaveData)
-
-      try {
-        const members = await db
-          .select({ userId: conversationMembers.userId })
-          .from(conversationMembers)
-          .where(eq(conversationMembers.conversationId, conversationId))
-
-        for (const member of members) {
-          if (member.userId !== socket.user.id) {
-            io.to(`user:${member.userId}`).emit('sfu:user-left', leaveData)
-          }
-        }
-      } catch (err: any) {
-        logger.error('Failed to broadcast user-left notification on disconnect', { error: err.message })
-      }
+    // 1. Tear down any call this socket was part of and notify the other participants.
+    await handleDirectCallDisconnect(io, socket)
+    for (const result of mediasoupService.removeSocketFromAllRooms(socket.id)) {
+      notifyCallLeave(io, result)
     }
 
     const lastSeen = new Date()

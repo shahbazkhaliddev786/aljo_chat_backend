@@ -123,6 +123,7 @@ export const getUserConversations = async (userId: string) => {
           name: users.name,
           email: users.email,
           avatarUrl: users.avatarUrl,
+          publicKey: users.publicKey,
           status: users.status,
           lastSeen: users.lastSeen,
           role: conversationMembers.role
@@ -168,6 +169,7 @@ export const getConversationDetails = async (conversationId: string, userId: str
       name: users.name,
       email: users.email,
       avatarUrl: users.avatarUrl,
+      publicKey: users.publicKey,
       status: users.status,
       lastSeen: users.lastSeen,
       role: conversationMembers.role

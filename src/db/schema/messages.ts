@@ -20,6 +20,9 @@ export const messages = pgTable('messages', {
   isEncrypted: boolean('is_encrypted').default(false).notNull(),
   ciphertext: text('ciphertext'),
   iv: text('iv'),
+  // Public keys used to derive the message key, so history stays decryptable after either side rotates keys.
+  senderPublicKey: text('sender_public_key'),
+  recipientPublicKey: text('recipient_public_key'),
   isEdited: boolean('is_edited').default(false).notNull(),
   isDeleted: boolean('is_deleted').default(false).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),

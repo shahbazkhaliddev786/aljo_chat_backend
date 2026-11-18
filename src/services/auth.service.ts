@@ -97,8 +97,10 @@ export const loginUser = async (data: ILoginData) => {
     expiresAt
   })
 
-  delete (user as any).password
-  return { user, accessToken, refreshToken }
+  const safeUser: Partial<typeof user> = { ...user }
+  delete safeUser.password
+  delete safeUser.keyBackup
+  return { user: safeUser, accessToken, refreshToken }
 }
 
 export const refreshAccessToken = async (token: string) => {
