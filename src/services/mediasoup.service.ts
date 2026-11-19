@@ -28,6 +28,8 @@ interface Peer {
 interface Room {
   conversationId: string
   router: Router
+  /** The worker this call runs on. */
+  slot: WorkerSlot
   peers: Map<string, Peer> // socketId -> Peer
 }
 
@@ -57,35 +59,65 @@ const MEDIA_CODECS: mediasoup.types.RouterRtpCodecCapability[] = [
   }
 ]
 
+interface WorkerSlot {
+  worker: mediasoup.types.Worker
+  /** Each worker gets its own slice of the RTC port range, so workers never compete for ports. */
+  portRange: { min: number; max: number }
+  rooms: number
+}
+
+/** Split [min, max] into `count` contiguous, non-overlapping slices. */
+export const splitPortRange = (min: number, max: number, count: number) => {
+  const total = max - min + 1
+  const size = Math.floor(total / count)
+  if (size < 2) throw new Error('MEDIASOUP RTC port range is too small for the number of workers')
+  return Array.from({ length: count }, (_, i) => ({
+    min: min + i * size,
+    max: i === count - 1 ? max : min + (i + 1) * size - 1
+  }))
+}
+
 class MediasoupService {
-  private worker: mediasoup.types.Worker | null = null
-  private workerPromise: Promise<mediasoup.types.Worker> | null = null
+  private workers: WorkerSlot[] = []
+  private workersPromise: Promise<WorkerSlot[]> | null = null
   private rooms: Map<string, Room> = new Map()
   private pendingRooms: Map<string, Promise<Room>> = new Map()
   private shuttingDown = false
 
-  /** Close the worker as part of a graceful shutdown. */
+  /** Close all workers as part of a graceful shutdown. */
   public close() {
     this.shuttingDown = true
-    this.worker?.close()
+    this.workers.forEach((slot) => slot.worker.close())
     this.rooms.clear()
   }
 
-  public async init(): Promise<mediasoup.types.Worker> {
-    if (this.worker) return this.worker
-    if (!this.workerPromise) {
-      this.workerPromise = (async () => {
-        const worker = await mediasoup.createWorker({ logLevel: 'warn' })
+  /**
+   * Start one mediasoup worker per CPU core (MEDIASOUP_NUM_WORKERS). Each worker
+   * runs on its own core, so group-call capacity grows with the machine.
+   */
+  public async init(): Promise<WorkerSlot[]> {
+    if (this.workers.length > 0) return this.workers
+    if (!this.workersPromise) {
+      this.workersPromise = (async () => {
+        const { NUM_WORKERS, RTC_MIN_PORT, RTC_MAX_PORT } = config.MEDIASOUP
+        const ranges = splitPortRange(RTC_MIN_PORT, RTC_MAX_PORT, NUM_WORKERS)
 
-        // Without a worker no group call can work, so exit and let the process
-        // manager restart us instead of running on with a dead SFU.
-        const onWorkerGone = (reason: string) => {
-          if (this.shuttingDown) return // expected during a graceful shutdown
-          logger.error('MEDIASOUP_WORKER_DIED', { meta: { pid: worker.pid, reason } })
-          setTimeout(() => process.exit(1), 2000)
-        }
-        worker.on('died', (err) => onWorkerGone(err?.message || 'died'))
-        worker.on('subprocessclose', () => onWorkerGone('subprocess closed'))
+        const slots = await Promise.all(
+          ranges.map(async (portRange) => {
+            const worker = await mediasoup.createWorker({ logLevel: 'warn' })
+
+            // Without its workers no group call can work, so exit and let the
+            // process manager restart us instead of running on with a dead SFU.
+            const onWorkerGone = (reason: string) => {
+              if (this.shuttingDown) return // expected during a graceful shutdown
+              logger.error('MEDIASOUP_WORKER_DIED', { meta: { pid: worker.pid, reason } })
+              setTimeout(() => process.exit(1), 2000)
+            }
+            worker.on('died', (err) => onWorkerGone(err?.message || 'died'))
+            worker.on('subprocessclose', () => onWorkerGone('subprocess closed'))
+            return { worker, portRange, rooms: 0 }
+          })
+        )
 
         if (!config.MEDIASOUP.ANNOUNCED_ADDRESS && config.MEDIASOUP.LISTEN_IP === '0.0.0.0') {
           logger.warn('MEDIASOUP_ANNOUNCED_IP_MISSING', {
@@ -96,15 +128,22 @@ class MediasoupService {
           })
         }
 
-        logger.info('MEDIASOUP_WORKER_READY', { meta: { pid: worker.pid } })
-        this.worker = worker
-        return worker
+        logger.info('MEDIASOUP_WORKERS_READY', {
+          meta: { workers: slots.map((s) => ({ pid: s.worker.pid, ports: `${s.portRange.min}-${s.portRange.max}` })) }
+        })
+        this.workers = slots
+        return slots
       })().catch((err) => {
-        this.workerPromise = null
+        this.workersPromise = null
         throw err
       })
     }
-    return this.workerPromise
+    return this.workersPromise
+  }
+
+  /** Number of workers and rooms per worker (for health/metrics). */
+  public stats() {
+    return this.workers.map((s) => ({ pid: s.worker.pid, rooms: s.rooms, ports: s.portRange }))
   }
 
   // ---------------------------------------------------------------------------
@@ -119,9 +158,12 @@ class MediasoupService {
     let pending = this.pendingRooms.get(conversationId)
     if (!pending) {
       pending = (async () => {
-        const worker = await this.init()
-        const router = await worker.createRouter({ mediaCodecs: MEDIA_CODECS })
-        const room: Room = { conversationId, router, peers: new Map() }
+        // Put each new call on the least busy worker.
+        const slots = await this.init()
+        const slot = slots.reduce((best, s) => (s.rooms < best.rooms ? s : best))
+        const router = await slot.worker.createRouter({ mediaCodecs: MEDIA_CODECS })
+        slot.rooms++
+        const room: Room = { conversationId, router, peers: new Map(), slot }
         this.rooms.set(conversationId, room)
         return room
       })().finally(() => this.pendingRooms.delete(conversationId))
@@ -178,8 +220,8 @@ class MediasoupService {
 
   public async createWebRtcTransport(conversationId: string, socketId: string) {
     const { room, peer } = this.getPeer(conversationId, socketId)
-    const { LISTEN_IP, ANNOUNCED_ADDRESS, RTC_MIN_PORT, RTC_MAX_PORT } = config.MEDIASOUP
-    const portRange = { min: RTC_MIN_PORT, max: RTC_MAX_PORT }
+    const { LISTEN_IP, ANNOUNCED_ADDRESS } = config.MEDIASOUP
+    const portRange = room.slot.portRange
 
     const transport = await room.router.createWebRtcTransport({
       listenInfos: [
@@ -341,6 +383,7 @@ class MediasoupService {
     let roomClosed = false
     if (room.peers.size === 0) {
       room.router.close()
+      room.slot.rooms--
       this.rooms.delete(conversationId)
       roomClosed = true
     }

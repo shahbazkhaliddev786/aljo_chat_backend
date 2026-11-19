@@ -122,7 +122,7 @@ export const getUserConversations = async (userId: string) => {
   const ids = conversationList.map((c) => c.id)
 
   // Two batched queries instead of two queries per conversation.
-  const [memberRows, latestMessages] = await Promise.all([
+  const [memberRows, latestMessages, unreadRows] = await Promise.all([
     db
       .select({ conversationId: conversationMembers.conversationId, ...memberFields })
       .from(conversationMembers)
@@ -135,12 +135,25 @@ export const getUserConversations = async (userId: string) => {
         content: messages.content,
         type: messages.type,
         isEncrypted: messages.isEncrypted,
+        isDeleted: messages.isDeleted,
         senderId: messages.senderId,
         createdAt: messages.createdAt
       })
       .from(messages)
       .where(inArray(messages.conversationId, ids))
-      .orderBy(messages.conversationId, desc(messages.createdAt))
+      .orderBy(messages.conversationId, desc(messages.createdAt)),
+    // Unread = messages from others newer than the user's read marker (capped for display).
+    db.execute<{ conversation_id: string; unread: number }>(sql`
+      select m.conversation_id, least(count(*), 100)::int as unread
+      from ${messages} m
+      join ${conversationMembers} cm on cm.conversation_id = m.conversation_id and cm.user_id = ${userId}
+      left join ${messages} lr on lr.id = cm.last_read_message_id
+      where m.conversation_id in ${ids}
+        and m.sender_id <> ${userId}
+        and m.is_deleted = false
+        and (lr.id is null or m.created_at > lr.created_at)
+      group by m.conversation_id
+    `)
   ])
 
   const membersByConversation = new Map<string, typeof memberRows>()
@@ -150,11 +163,18 @@ export const getUserConversations = async (userId: string) => {
     membersByConversation.set(row.conversationId, list)
   }
   const latestByConversation = new Map(latestMessages.map((m) => [m.conversationId, m]))
+  const unreadByConversation = new Map(
+    Array.from(unreadRows as Iterable<{ conversation_id: string; unread: number }>).map((r) => [
+      r.conversation_id,
+      Number(r.unread)
+    ])
+  )
 
   return conversationList.map((conv) => {
     const latest = latestByConversation.get(conv.id)
     return {
       ...conv,
+      unreadCount: unreadByConversation.get(conv.id) ?? 0,
       members: (membersByConversation.get(conv.id) ?? []).map(({ conversationId: _c, ...member }) => member),
       latestMessage: latest
         ? {
@@ -162,6 +182,7 @@ export const getUserConversations = async (userId: string) => {
             content: latest.content,
             type: latest.type,
             isEncrypted: latest.isEncrypted,
+            isDeleted: latest.isDeleted,
             senderId: latest.senderId,
             createdAt: latest.createdAt
           }

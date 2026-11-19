@@ -2,7 +2,7 @@ import type { Request, Response } from 'express'
 import { asyncHandler } from '../utils/async.handler.js'
 import { apiResponse } from '../utils/api.response.js'
 import { searchUsers, getUserById, updateUserProfile, updatePublicKey, getKeyBackup } from '../services/user.service.js'
-import { uploadToCloudinary } from '../utils/cloudinary.js'
+import { uploadFile } from '../utils/storage.js'
 import { getIO } from '../loaders/socket.js'
 import { conversationRoom } from '../sockets/rooms.js'
 import { db } from '../db/index.js'
@@ -28,7 +28,7 @@ export const updateProfile = asyncHandler(async (req: Request, res: Response) =>
   let avatarUrl: string | undefined
 
   if (req.file) {
-    avatarUrl = await uploadToCloudinary(req.file, 'aljo-chat/avatars')
+    avatarUrl = await uploadFile(req.file, 'aljo-chat/avatars')
   }
 
   const updatedUser = await updateUserProfile(userId, {

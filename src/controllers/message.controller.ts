@@ -2,7 +2,7 @@ import type { Request, Response } from 'express'
 import { asyncHandler } from '../utils/async.handler.js'
 import { apiResponse } from '../utils/api.response.js'
 import { createMessage, getConversationMessages } from '../services/message.service.js'
-import { uploadToCloudinary } from '../utils/cloudinary.js'
+import { uploadFile } from '../utils/storage.js'
 import { getIO } from '../loaders/socket.js'
 import { ESocketEvents } from '../constants/socket-events.js'
 import { userRooms } from '../sockets/rooms.js'
@@ -24,7 +24,7 @@ export const sendMessageHttp = asyncHandler(async (req: Request, res: Response) 
   let messageType: 'text' | 'image' | 'file' | 'audio' | 'system' = req.body.type || 'text'
 
   if (req.file) {
-    mediaUrl = await uploadToCloudinary(req.file, 'aljo-chat/attachments')
+    mediaUrl = await uploadFile(req.file, 'aljo-chat/attachments')
     if (!req.body.type) {
       messageType = req.file.mimetype.startsWith('image/') ? 'image' : 'file'
     }
@@ -42,6 +42,7 @@ export const sendMessageHttp = asyncHandler(async (req: Request, res: Response) 
     iv: req.body.iv,
     senderPublicKey: req.body.senderPublicKey,
     recipientPublicKey: req.body.recipientPublicKey,
+    keyEnvelopes: req.body.keyEnvelopes,
     clientMessageId: req.body.clientMessageId
   })
 

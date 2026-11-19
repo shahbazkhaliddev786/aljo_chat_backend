@@ -30,6 +30,10 @@ export const globalErrorHandler = (err: any, req: Request, res: Response, _next:
   } else if (err?.type === 'entity.parse.failed') {
     status = 400
     message = 'Malformed JSON body'
+  } else if (typeof err?.status === 'number' && err.status >= 400 && err.status < 500) {
+    // 4xx raised by middleware (e.g. static files not found)
+    status = err.status
+    message = status === 404 ? 'Not found' : 'Request failed'
   } else if (pgCode(err) && PG_CLIENT_ERRORS[pgCode(err)!]) {
     ;({ status, message } = PG_CLIENT_ERRORS[pgCode(err)!])
   }

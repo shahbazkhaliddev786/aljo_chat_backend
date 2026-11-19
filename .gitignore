@@ -7,3 +7,6 @@ logs/*.log
 .env.production
 .env.local
 *.tsbuildinfo
+
+# Local uploads (dev storage fallback)
+uploads/

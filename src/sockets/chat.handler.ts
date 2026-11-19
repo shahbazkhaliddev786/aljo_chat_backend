@@ -1,7 +1,13 @@
 import { Server } from 'socket.io'
 import { AuthenticatedSocket, ISendMessagePayload, IReadReceiptPayload } from '../types/socket.types.js'
 import { ESocketEvents } from '../constants/socket-events.js'
-import { createMessage, markMessageAsRead } from '../services/message.service.js'
+import {
+  createMessage,
+  markMessageAsRead,
+  editMessage,
+  deleteMessage,
+  toggleReaction
+} from '../services/message.service.js'
 import { getMembership, isUuid } from '../services/membership.service.js'
 import { conversationRoom, userRooms } from './rooms.js'
 import logger from '../utils/logger.js'
@@ -60,6 +66,7 @@ export const registerChatHandlers = (io: Server, socket: AuthenticatedSocket) =>
           iv: payload.iv,
           senderPublicKey: payload.senderPublicKey,
           recipientPublicKey: payload.recipientPublicKey,
+          keyEnvelopes: payload.keyEnvelopes,
           clientMessageId: payload.clientMessageId
         })
 
@@ -85,5 +92,40 @@ export const registerChatHandlers = (io: Server, socket: AuthenticatedSocket) =>
     } catch (error: any) {
       logger.error('SOCKET_READ_RECEIPT_ERROR', { error: error.message })
     }
+  })
+
+  /** Shared wrapper for message actions: auth, ack and safe errors. */
+  const action = (event: string, handler: (payload: any, userId: string) => Promise<Record<string, unknown>>) => {
+    socket.on(event, async (payload: any, callback: unknown) => {
+      const ack = safeAck(callback)
+      if (!socket.user) return ack({ error: 'Unauthorized' })
+      try {
+        ack(await handler(payload || {}, socket.user.id))
+      } catch (error: any) {
+        logger.warn('SOCKET_MESSAGE_ACTION_FAILED', { meta: { event, error: error.message } })
+        ack({ error: publicErrorMessage(error) })
+      }
+    })
+  }
+
+  // Edit your own message (encrypted messages arrive re-encrypted from the client).
+  action('edit_message', async (payload, userId) => {
+    const { message, memberIds } = await editMessage({ ...payload, userId })
+    io.to(userRooms(memberIds)).emit('message_updated', message)
+    return { message }
+  })
+
+  // Delete your own message for everyone.
+  action('delete_message', async ({ messageId }, userId) => {
+    const { message, memberIds } = await deleteMessage(messageId, userId)
+    io.to(userRooms(memberIds)).emit('message_updated', message)
+    return { message }
+  })
+
+  // Toggle an emoji reaction.
+  action('toggle_reaction', async ({ messageId, emoji }, userId) => {
+    const { memberIds, ...result } = await toggleReaction(messageId, userId, emoji)
+    io.to(userRooms(memberIds)).emit('message_reactions', result)
+    return result
   })
 }

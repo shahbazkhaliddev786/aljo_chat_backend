@@ -1,4 +1,5 @@
 import dotenvFlow from 'dotenv-flow'
+import os from 'os'
 
 dotenvFlow.config()
 
@@ -54,7 +55,9 @@ export const config = {
     // Public IP/hostname clients must reach. Required whenever LISTEN_IP is 0.0.0.0 or a private IP.
     ANNOUNCED_ADDRESS: process.env.MEDIASOUP_ANNOUNCED_IP || undefined,
     RTC_MIN_PORT: Number(process.env.MEDIASOUP_RTC_MIN_PORT) || 40000,
-    RTC_MAX_PORT: Number(process.env.MEDIASOUP_RTC_MAX_PORT) || 40100
+    RTC_MAX_PORT: Number(process.env.MEDIASOUP_RTC_MAX_PORT) || 40100,
+    // One worker per core (each worker is single-threaded); capped by default.
+    NUM_WORKERS: Number(process.env.MEDIASOUP_NUM_WORKERS) || Math.min(os.cpus().length, 4)
   },
 
   // ICE servers handed to browsers for both P2P and SFU calls

@@ -21,7 +21,9 @@ const ATTACHMENT_TYPES = [
   'audio/webm',
   'audio/wav',
   'video/mp4',
-  'video/webm'
+  'video/webm',
+  // End-to-end encrypted attachments are uploaded as opaque ciphertext.
+  'application/octet-stream'
 ]
 
 const allow = (types: string[]) => (_req: Request, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
