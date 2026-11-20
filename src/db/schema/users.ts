@@ -14,6 +14,8 @@ export const users = pgTable('users', {
   avatarUrl: text('avatar_url'),
   bio: text('bio'),
   publicKey: text('public_key'),
+  // Private E2EE key wrapped client-side with a password-derived key (JSON). The server cannot use it without the password.
+  keyBackup: text('key_backup'),
   status: userStatusEnum('status').default('offline').notNull(),
   lastSeen: timestamp('last_seen', { withTimezone: true }),
   isVerified: boolean('is_verified').default(false).notNull(),

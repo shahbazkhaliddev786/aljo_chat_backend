@@ -1,5 +1,5 @@
 import type { Express } from 'express'
-import { authRouter, userRouter, conversationRouter, messageRouter } from '../routes/index.js'
+import { authRouter, userRouter, conversationRouter, messageRouter, callRouter } from '../routes/index.js'
 
 export default async function routesLoader(app: Express) {
   // Health & Root Status
@@ -23,6 +23,7 @@ export default async function routesLoader(app: Express) {
   app.use('/api/v1/users', userRouter)
   app.use('/api/v1/conversations', conversationRouter)
   app.use('/api/v1/messages', messageRouter)
+  app.use('/api/v1/calls', callRouter)
 
   // Unmatched route catch-all (404)
   app.use((req, res) => {
