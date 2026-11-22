@@ -13,11 +13,54 @@ import {
   removeGroupMember
 } from '../services/conversation.service.js'
 import { getIO } from '../loaders/socket.js'
+import { mediasoupService } from '../services/mediasoup.service.js'
+import { notifyCallLeave } from '../sockets/mediasoup.handler.js'
+import {
+  conversationRoom,
+  userRooms,
+  joinUsersToConversation,
+  removeUsersFromConversation,
+  closeConversationRoom
+} from '../sockets/rooms.js'
+import logger from '../utils/logger.js'
+
+/**
+ * Socket side effects of membership changes. Socket rooms are the access
+ * boundary for real-time events, so they must always mirror the database.
+ * Failures here never fail the HTTP request (the DB change already happened).
+ */
+const withSocket = (action: string, fn: (io: ReturnType<typeof getIO>) => void) => {
+  try {
+    fn(getIO())
+  } catch (err: any) {
+    logger.error('SOCKET_SYNC_FAILED', { meta: { action, error: err.message } })
+  }
+}
+
+/** Drop a user out of an ongoing group call in this conversation, if any. */
+const removeUserFromCall = (io: ReturnType<typeof getIO>, conversationId: string, userId: string) => {
+  for (const result of mediasoupService.removeUserFromRoom(conversationId, userId)) notifyCallLeave(io, result)
+}
+
+/** End an ongoing group call in this conversation for everyone. */
+const endCallForEveryone = (io: ReturnType<typeof getIO>, conversationId: string) => {
+  for (const socketId of mediasoupService.getPeerSocketIds(conversationId)) {
+    const result = mediasoupService.leaveRoom(conversationId, socketId)
+    if (result) notifyCallLeave(io, result)
+  }
+}
 
 export const getDirect = asyncHandler(async (req: Request, res: Response) => {
   const userId = req.user?.id as string
   const { targetUserId } = req.body
   const conversation = await getOrCreateDirectConversation(userId, targetUserId)
+  withSocket('direct-created', (io) =>
+    joinUsersToConversation(
+      io,
+      conversation.id,
+      conversation.members.map((m) => m.id)
+    )
+  )
   return apiResponse(res, 200, 'success', 'Direct conversation ready', { conversation })
 })
 
@@ -25,6 +68,11 @@ export const createGroup = asyncHandler(async (req: Request, res: Response) => {
   const userId = req.user?.id as string
   const { title, memberIds, avatarUrl } = req.body
   const conversation = await createGroupConversation(userId, { title, memberIds, avatarUrl })
+  withSocket('group-created', (io) => {
+    const memberIds = conversation.members.map((m) => m.id)
+    joinUsersToConversation(io, conversation.id, memberIds)
+    io.to(userRooms(memberIds)).emit('group_members_updated', { conversationId: conversation.id })
+  })
   return apiResponse(res, 201, 'success', 'Group conversation created', { conversation })
 })
 
@@ -46,17 +94,15 @@ export const leaveGroup = asyncHandler(async (req: Request, res: Response) => {
   const conversationId = req.params.id as string
   const result = await leaveGroupConversation(conversationId, userId)
 
-  try {
-    const io = getIO()
-    io.to(`conversation:${conversationId}`).emit('user_left_group', result)
-    if (result.remainingUserIds) {
-      for (const mId of result.remainingUserIds) {
-        io.to(`user:${mId}`).emit('user_left_group', result)
-      }
+  withSocket('left-group', (io) => {
+    removeUserFromCall(io, conversationId, userId)
+    removeUsersFromConversation(io, conversationId, [userId])
+    // Never call io.to() with an empty list: socket.io treats "no rooms" as "everyone".
+    if (result.remainingUserIds?.length) {
+      io.to(userRooms(result.remainingUserIds)).emit('user_left_group', result)
     }
-  } catch {
-    // Non-blocking socket fallback
-  }
+    if (result.deleted) closeConversationRoom(io, conversationId)
+  })
 
   return apiResponse(res, 200, 'success', 'Left group successfully', result)
 })
@@ -66,15 +112,11 @@ export const deleteGroup = asyncHandler(async (req: Request, res: Response) => {
   const conversationId = req.params.id as string
   const result = await deleteGroupConversation(conversationId, userId)
 
-  try {
-    const io = getIO()
-    io.to(`conversation:${conversationId}`).emit('group_deleted', { conversationId })
-    for (const memberId of result.memberUserIds) {
-      io.to(`user:${memberId}`).emit('group_deleted', { conversationId })
-    }
-  } catch {
-    // Non-blocking socket fallback
-  }
+  withSocket('group-deleted', (io) => {
+    endCallForEveryone(io, conversationId)
+    io.to(userRooms(result.memberUserIds)).emit('group_deleted', { conversationId })
+    closeConversationRoom(io, conversationId)
+  })
 
   return apiResponse(res, 200, 'success', 'Group deleted successfully', result)
 })
@@ -84,15 +126,10 @@ export const deleteDirect = asyncHandler(async (req: Request, res: Response) => 
   const conversationId = req.params.id as string
   const result = await deleteDirectConversation(conversationId, userId)
 
-  try {
-    const io = getIO()
-    io.to(`conversation:${conversationId}`).emit('conversation_deleted', { conversationId })
-    for (const memberId of result.memberUserIds) {
-      io.to(`user:${memberId}`).emit('conversation_deleted', { conversationId })
-    }
-  } catch {
-    // Non-blocking socket fallback
-  }
+  withSocket('direct-deleted', (io) => {
+    io.to(userRooms(result.memberUserIds)).emit('conversation_deleted', { conversationId })
+    closeConversationRoom(io, conversationId)
+  })
 
   return apiResponse(res, 200, 'success', 'Direct conversation deleted successfully', result)
 })
@@ -102,21 +139,12 @@ export const addMembers = asyncHandler(async (req: Request, res: Response) => {
   const conversationId = req.params.id as string
   const { memberIds } = req.body
 
-  if (!Array.isArray(memberIds) || memberIds.length === 0) {
-    return apiResponse(res, 400, 'error', 'memberIds array is required')
-  }
-
   const result = await addGroupMembers(conversationId, adminUserId, memberIds)
 
-  try {
-    const io = getIO()
-    io.to(`conversation:${conversationId}`).emit('group_members_updated', result)
-    for (const mId of result.allMemberUserIds) {
-      io.to(`user:${mId}`).emit('group_members_updated', result)
-    }
-  } catch {
-    // Non-blocking socket fallback
-  }
+  withSocket('members-added', (io) => {
+    joinUsersToConversation(io, conversationId, result.addedUserIds)
+    io.to(conversationRoom(conversationId)).emit('group_members_updated', result)
+  })
 
   return apiResponse(res, 200, 'success', 'Members added successfully', result)
 })
@@ -128,16 +156,11 @@ export const removeMember = asyncHandler(async (req: Request, res: Response) => 
 
   const result = await removeGroupMember(conversationId, adminUserId, targetUserId)
 
-  try {
-    const io = getIO()
-    io.to(`conversation:${conversationId}`).emit('member_removed_from_group', result)
-    io.to(`user:${targetUserId}`).emit('member_removed_from_group', result)
-    for (const mId of result.remainingUserIds) {
-      io.to(`user:${mId}`).emit('member_removed_from_group', result)
-    }
-  } catch {
-    // Non-blocking socket fallback
-  }
+  withSocket('member-removed', (io) => {
+    removeUserFromCall(io, conversationId, targetUserId)
+    io.to(userRooms([...result.remainingUserIds, targetUserId])).emit('member_removed_from_group', result)
+    removeUsersFromConversation(io, conversationId, [targetUserId])
+  })
 
   return apiResponse(res, 200, 'success', 'Member removed successfully', result)
 })

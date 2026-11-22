@@ -46,6 +46,10 @@ COPY --from=builder /usr/src/app/dist ./dist
 
 # Expose default HTTP/Socket port
 EXPOSE 5000
+# Mediasoup SFU media ports (must match MEDIASOUP_RTC_MIN_PORT/MAX_PORT and be
+# publicly reachable; also set MEDIASOUP_ANNOUNCED_IP to the public IP).
+EXPOSE 40000-40100/udp
+EXPOSE 40000-40100/tcp
 
 # Start the application
 CMD ["npm", "start"]

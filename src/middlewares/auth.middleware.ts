@@ -27,7 +27,8 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
         id: users.id,
         email: users.email,
         name: users.name,
-        avatarUrl: users.avatarUrl
+        avatarUrl: users.avatarUrl,
+        isVerified: users.isVerified
       })
       .from(users)
       .where(eq(users.id, payload.userId))

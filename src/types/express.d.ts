@@ -3,6 +3,7 @@ export interface IUserPayload {
   email: string
   name: string
   avatarUrl?: string | null
+  isVerified?: boolean
 }
 
 declare global {
