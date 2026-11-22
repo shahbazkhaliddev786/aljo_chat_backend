@@ -2,7 +2,7 @@ import { db } from '../db/index.js'
 import { messages, messageReactions } from '../db/schema/messages.js'
 import { conversations, conversationMembers } from '../db/schema/conversations.js'
 import { users } from '../db/schema/users.js'
-import { eq, and, desc, lt, or, inArray } from 'drizzle-orm'
+import { eq, and, desc, inArray, sql } from 'drizzle-orm'
 import { isUuid } from './membership.service.js'
 import { badRequest, conflict, forbidden, notFound } from '../utils/app-error.js'
 
@@ -242,25 +242,25 @@ export const getConversationMessages = async (conversationId: string, userId: st
 
   const pageSize = Math.min(Math.max(Math.trunc(limit) || 50, 1), 100)
 
-  let cursor: { createdAt: Date; id: string } | null = null
   if (before) {
     const [row] = await db
-      .select({ createdAt: messages.createdAt, id: messages.id })
+      .select({ id: messages.id })
       .from(messages)
       .where(and(eq(messages.id, before), eq(messages.conversationId, conversationId)))
       .limit(1)
     if (!row) throw badRequest('Unknown message cursor')
-    cursor = row
   }
-  // Strictly older than the cursor; ties on createdAt are broken by id.
-  const olderThan = (c: { createdAt: Date; id: string }) =>
-    or(lt(messages.createdAt, c.createdAt), and(eq(messages.createdAt, c.createdAt), lt(messages.id, c.id)))
+  // Strictly older than the cursor, compared inside Postgres: JS Dates only keep
+  // milliseconds, so comparing against a Date read back from the DB could skip
+  // messages created within the same millisecond. Ties are broken by id.
+  const olderThanCursor = (cursorId: string) =>
+    sql`(${messages.createdAt}, ${messages.id}) < (select c.created_at, c.id from messages c where c.id = ${cursorId})`
 
   const messageList = await db
     .select(messageFields)
     .from(messages)
     .innerJoin(users, eq(users.id, messages.senderId))
-    .where(and(eq(messages.conversationId, conversationId), cursor ? olderThan(cursor) : undefined))
+    .where(and(eq(messages.conversationId, conversationId), before ? olderThanCursor(before) : undefined))
     .orderBy(desc(messages.createdAt), desc(messages.id))
     .limit(pageSize + 1)
 
@@ -292,12 +292,14 @@ export const markMessageAsRead = async (conversationId: string, userId: string, 
 
   if (member.lastReadMessageId) {
     if (member.lastReadMessageId === messageId) return null
-    const [current] = await db
-      .select({ createdAt: messages.createdAt })
-      .from(messages)
-      .where(eq(messages.id, member.lastReadMessageId))
-      .limit(1)
-    if (current && current.createdAt >= target.createdAt) return null
+    // Compare (created_at, id) in Postgres at full precision (JS Dates drop microseconds).
+    const rows = await db.execute<{ newer: boolean }>(sql`
+      select (t.created_at, t.id) > (c.created_at, c.id) as newer
+      from messages t, messages c
+      where t.id = ${messageId} and c.id = ${member.lastReadMessageId}
+    `)
+    const [row] = Array.from(rows as Iterable<{ newer: boolean }>)
+    if (row && !row.newer) return null
   }
 
   await db

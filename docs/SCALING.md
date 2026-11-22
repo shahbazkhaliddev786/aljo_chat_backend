@@ -15,7 +15,7 @@ Adding the Socket.IO Redis adapter alone would fix only the first row. Calls wou
 ### Capacity knobs for one machine
 
 - **`MEDIASOUP_NUM_WORKERS`** (default: number of cores, max 4). Each mediasoup worker is single-threaded and uses one core. New calls go to the least busy worker.
-- **`MEDIASOUP_RTC_MIN_PORT` / `MEDIASOUP_RTC_MAX_PORT`.** The range is split evenly between workers. Each participant uses 2 transports, and each transport uses a UDP and a TCP port. Size the range at about 4 × the peak number of call participants, and open the same range in the firewall and container.
+- **`MEDIASOUP_RTC_MIN_PORT` / `MEDIASOUP_RTC_MAX_PORT`.** All workers share the whole range (mediasoup skips ports already in use), so a single call can use all of it. Each participant uses 2 transports, and each transport takes one UDP and one TCP port from the range. Size the range at about 2 × the peak number of concurrent call participants (across all calls), and open the same range in the firewall and container.
 - **Postgres.** The hot queries are indexed (`messages_conversation_created_idx`, `conversation_members_user_idx`). Use a pooled connection (Supabase pooler) and raise `max` on the `postgres()` client if the database allows.
 - **TURN.** Relay traffic goes through your TURN server, not this process. Size it separately.
 

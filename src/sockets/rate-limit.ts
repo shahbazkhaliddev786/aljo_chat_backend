@@ -16,6 +16,9 @@ const LIMITS: Record<string, BucketConfig> = {
   typing: { burst: 10, perSecond: 3 },
   ice: { burst: 150, perSecond: 50 }, // ICE candidates arrive in bursts at call setup
   call: { burst: 60, perSecond: 20 },
+  // Joining a call consumes every other participant's audio+video (consume + resume
+  // each), all at once: ~4 events per participant, so this must scale with room size.
+  media: { burst: 600, perSecond: 200 },
   default: { burst: 30, perSecond: 10 }
 }
 
@@ -23,6 +26,7 @@ const categoryOf = (event: string): string => {
   if (event === 'send_message') return 'message'
   if (event === 'typing_start' || event === 'typing_stop') return 'typing'
   if (event === 'ice:candidate') return 'ice'
+  if (event === 'sfu:consume' || event === 'sfu:resume-consumer') return 'media'
   if (event.startsWith('call:') || event.startsWith('sfu:')) return 'call'
   return 'default'
 }

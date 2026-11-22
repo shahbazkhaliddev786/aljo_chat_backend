@@ -58,8 +58,9 @@ export const registerChatHandlers = (io: Server, socket: AuthenticatedSocket) =>
           conversationId: payload.conversationId,
           senderId: socket.user.id,
           content: payload.content,
-          type: payload.type,
-          mediaUrl: payload.mediaUrl,
+          // Text only: attachments (and their URLs) only come from the upload endpoint,
+          // so a client cannot make recipients load an arbitrary URL or forge "system" messages.
+          type: 'text',
           replyToId: payload.replyToId,
           isEncrypted: payload.isEncrypted === true,
           ciphertext: payload.ciphertext,

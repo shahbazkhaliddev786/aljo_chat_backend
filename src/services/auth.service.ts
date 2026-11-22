@@ -145,6 +145,27 @@ export const refreshAccessToken = async (token: string) => {
   return issueSession(payload.userId)
 }
 
+/** Delete one session by its refresh token (signature checked; unknown/expired tokens are a no-op). */
+export const revokeRefreshToken = async (token: string) => {
+  let payload: { userId: string }
+  try {
+    payload = jwt.verify(token, config.REFRESH_TOKEN_SECRET, { ignoreExpiration: true }) as { userId: string }
+  } catch {
+    return
+  }
+  await logoutUser(payload.userId, token)
+}
+
+/** The user id of a valid `Bearer <access token>` header, or null. */
+export const verifyAccessToken = (authorization?: string): string | null => {
+  if (!authorization?.startsWith('Bearer ')) return null
+  try {
+    return (jwt.verify(authorization.slice(7), config.JWT_SECRET) as { userId: string }).userId
+  } catch {
+    return null
+  }
+}
+
 export const logoutUser = async (userId: string, token?: string) => {
   if (token) {
     await db

@@ -21,13 +21,19 @@ export const sendMessageHttp = asyncHandler(async (req: Request, res: Response) 
   const userId = req.user?.id as string
   const conversationId = req.params.conversationId as string
   let mediaUrl: string | undefined
-  let messageType: 'text' | 'image' | 'file' | 'audio' | 'system' = req.body.type || 'text'
+  // Clients may only send text, image and file messages; "system" is server-only.
+  let messageType: 'text' | 'image' | 'file' | 'audio' | 'system' = 'text'
 
   if (req.file) {
     mediaUrl = await uploadFile(req.file, 'aljo-chat/attachments')
-    if (!req.body.type) {
-      messageType = req.file.mimetype.startsWith('image/') ? 'image' : 'file'
-    }
+    // Encrypted uploads are opaque (application/octet-stream), so honour the client's
+    // image/file choice; anything else is derived from the upload's mime type.
+    messageType =
+      req.body.type === 'image' || req.body.type === 'file'
+        ? req.body.type
+        : req.file.mimetype.startsWith('image/')
+          ? 'image'
+          : 'file'
   }
 
   const message = await createMessage({

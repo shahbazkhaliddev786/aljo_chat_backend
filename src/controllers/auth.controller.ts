@@ -9,9 +9,11 @@ import {
   isEmailTaken,
   sendVerificationEmailSafely,
   verifyEmail,
-  resendVerificationEmail
+  resendVerificationEmail,
+  revokeRefreshToken,
+  verifyAccessToken
 } from '../services/auth.service.js'
-import { conflict } from '../utils/app-error.js'
+import { conflict, unauthorized } from '../utils/app-error.js'
 import { uploadFile } from '../utils/storage.js'
 
 export const register = asyncHandler(async (req: Request, res: Response) => {
@@ -44,9 +46,16 @@ export const refreshToken = asyncHandler(async (req: Request, res: Response) => 
 })
 
 export const logout = asyncHandler(async (req: Request, res: Response) => {
-  const userId = req.user?.id as string
   const { refreshToken: token } = req.body
-  await logoutUser(userId, token)
+  if (typeof token === 'string' && token) {
+    // Revoke exactly this session; works even if the access token has expired.
+    await revokeRefreshToken(token)
+  } else {
+    // No refresh token: "log out everywhere" for the bearer of a valid access token.
+    const userId = verifyAccessToken(req.headers.authorization)
+    if (!userId) throw unauthorized('Authentication required')
+    await logoutUser(userId)
+  }
   return apiResponse(res, 200, 'success', 'Logged out successfully')
 })
 

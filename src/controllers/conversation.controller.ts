@@ -97,7 +97,8 @@ export const leaveGroup = asyncHandler(async (req: Request, res: Response) => {
   withSocket('left-group', (io) => {
     removeUserFromCall(io, conversationId, userId)
     removeUsersFromConversation(io, conversationId, [userId])
-    if (result.remainingUserIds) {
+    // Never call io.to() with an empty list: socket.io treats "no rooms" as "everyone".
+    if (result.remainingUserIds?.length) {
       io.to(userRooms(result.remainingUserIds)).emit('user_left_group', result)
     }
     if (result.deleted) closeConversationRoom(io, conversationId)

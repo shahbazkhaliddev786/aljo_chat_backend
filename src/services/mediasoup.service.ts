@@ -61,20 +61,13 @@ const MEDIA_CODECS: mediasoup.types.RouterRtpCodecCapability[] = [
 
 interface WorkerSlot {
   worker: mediasoup.types.Worker
-  /** Each worker gets its own slice of the RTC port range, so workers never compete for ports. */
+  /**
+   * Every worker uses the whole RTC port range: mediasoup skips ports that are
+   * already bound (by this or another worker) and tries the next one, so one
+   * call can use the full range instead of a per-worker slice.
+   */
   portRange: { min: number; max: number }
   rooms: number
-}
-
-/** Split [min, max] into `count` contiguous, non-overlapping slices. */
-export const splitPortRange = (min: number, max: number, count: number) => {
-  const total = max - min + 1
-  const size = Math.floor(total / count)
-  if (size < 2) throw new Error('MEDIASOUP RTC port range is too small for the number of workers')
-  return Array.from({ length: count }, (_, i) => ({
-    min: min + i * size,
-    max: i === count - 1 ? max : min + (i + 1) * size - 1
-  }))
 }
 
 class MediasoupService {
@@ -100,7 +93,8 @@ class MediasoupService {
     if (!this.workersPromise) {
       this.workersPromise = (async () => {
         const { NUM_WORKERS, RTC_MIN_PORT, RTC_MAX_PORT } = config.MEDIASOUP
-        const ranges = splitPortRange(RTC_MIN_PORT, RTC_MAX_PORT, NUM_WORKERS)
+        if (RTC_MAX_PORT - RTC_MIN_PORT < 1) throw new Error('MEDIASOUP RTC port range is too small')
+        const ranges = Array.from({ length: NUM_WORKERS }, () => ({ min: RTC_MIN_PORT, max: RTC_MAX_PORT }))
 
         const slots = await Promise.all(
           ranges.map(async (portRange) => {
